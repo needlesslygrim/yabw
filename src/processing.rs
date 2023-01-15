@@ -1,5 +1,6 @@
 use anyhow::anyhow;
 use std::ffi::OsStr;
+use std::fs::File;
 use std::io::{stderr, Write};
 use std::path::Path;
 use std::process::{Command, Output};
@@ -14,7 +15,7 @@ fn parse_json(output: Output) -> anyhow::Result<YTDLPJSON> {
     }
 }
 
-fn process_video(ytdlp: &YtDlp) -> anyhow::Result<()> {
+fn process_video(ytdlp: &YtDlp) -> anyhow::Result<Output> {
     println!("Processing video...");
 
     let output = Command::new("ffmpeg")
@@ -44,18 +45,11 @@ fn process_video(ytdlp: &YtDlp) -> anyhow::Result<()> {
         )
         .output()?;
 
-    if let Some(code) = output.status.code() {
-        if code != 0 {
-            return Err(anyhow!(
-                "ffmpeg failed to execute, the error code was {code}"
-            ));
-        }
-    }
     println!("Processed video.");
-    Ok(())
+    Ok(output)
 }
 
-fn process_audio(ytdlp: &YtDlp) -> anyhow::Result<()> {
+fn process_audio(ytdlp: &YtDlp) -> anyhow::Result<Output> {
     println!("Processing audio...");
 
     let output = Command::new("ffmpeg")
@@ -84,26 +78,31 @@ fn process_audio(ytdlp: &YtDlp) -> anyhow::Result<()> {
                 + ".mp3",
         )
         .output()?;
-    stderr().write(&output.stderr);
-    if let Some(code) = output.status.code() {
-        if code != 0 {
-            return Err(anyhow!(
-                "ffmpeg failed to execute, the error code was {code}"
-            ));
-        }
-    }
+
     println!("Processed audio.");
-    Ok(())
+    Ok(output)
 }
 
 fn process_file(ytdlp: &YtDlp, media_type: MediaType) -> anyhow::Result<()> {
-    match media_type {
+    let output = match media_type {
         MediaType::Audio => process_audio(ytdlp),
         MediaType::Video(_) => process_video(ytdlp),
+    }?;
+
+    File::create("ffmpeg.log")?.write(&output.stdout)?;
+
+    if let Some(code) = output.status.code() {
+        if code != 0 {
+            return Err(anyhow!(
+                "ffmpeg failed to process the file, the error message was: \n {}",
+                String::from_utf8(output.stderr)?
+            ));
+        }
     }
+    Ok(())
 }
 
-fn process_yt_dlp_stdout(output: Output, download_dir: &Path) -> anyhow::Result<YtDlp> {
+fn process_yt_dlp_stdout(output: Output) -> anyhow::Result<YtDlp> {
     let ytdlpjson = parse_json(output)?;
     let ytdlp = YtDlp::new(&ytdlpjson)?;
 
@@ -111,7 +110,7 @@ fn process_yt_dlp_stdout(output: Output, download_dir: &Path) -> anyhow::Result<
 }
 
 pub fn process(output: Output, config: &Config) -> anyhow::Result<()> {
-    let ytdlp = process_yt_dlp_stdout(output, config.download_dir)?;
+    let ytdlp = process_yt_dlp_stdout(output)?;
     let needs_processing = ytdlp.needs_processing(&config)?;
 
     if needs_processing {

@@ -124,16 +124,19 @@ fn download_audio(config: &Config) -> anyhow::Result<Output> {
 
     Ok(output)
 }
+
 pub fn download(config: &Config) -> anyhow::Result<Output> {
     let output = match config.media_type {
         MediaType::Audio => download_audio(config)?,
         MediaType::Video(_) => download_video(config)?,
     };
+
     File::create("yt-dlp.json")?.write(&output.stdout)?;
+
     if let Some(code) = output.status.code() {
         if code != 0 {
             return Err(anyhow!(
-                "yt-dlp failed to execute, the error message was: \n {}",
+                "yt-dlp failed to execute successfully, the error message was: \n {}",
                 String::from_utf8(output.stderr)?
             ));
         }
