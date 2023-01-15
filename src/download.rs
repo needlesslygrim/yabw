@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io::Write;
+use std::io::{stderr, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -15,8 +15,8 @@ pub struct YTDLPJSON {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestedDownload {
-    #[serde(rename = "_filename")]
-    pub filename: String,
+    #[serde(rename = "filepath")]
+    pub filepath: String,
 }
 #[derive(Debug, Clone)]
 pub struct YtDlp {
@@ -24,16 +24,17 @@ pub struct YtDlp {
 }
 
 impl YtDlp {
-    pub fn new(download_dir: &Path, yt_dlp_json: &YTDLPJSON) -> anyhow::Result<Self> {
+    pub fn new(yt_dlp_json: &YTDLPJSON) -> anyhow::Result<Self> {
         Ok(YtDlp {
-            filename: download_dir.join(Path::new(
+            filename: Path::new(
                 yt_dlp_json
                     .requested_downloads
                     .get(0)
                     .ok_or_else(|| anyhow!("This shouldn't be possible"))?
-                    .filename
+                    .filepath
                     .as_str(),
-            )),
+            )
+            .into(),
         })
     }
 
@@ -111,13 +112,24 @@ fn download_video(config: &Config) -> anyhow::Result<Output> {
     Ok(output)
 }
 
+fn download_audio(config: &Config) -> anyhow::Result<Output> {
+    let output = Command::new("yt-dlp")
+        .arg(&config.url)
+        .arg("-J")
+        .arg("-q")
+        .arg("-x")
+        .arg("--no-simulate")
+        .current_dir(config.download_dir)
+        .output()?;
+
+    Ok(output)
+}
 pub fn download(config: &Config) -> anyhow::Result<Output> {
     let output = match config.media_type {
-        MediaType::Audio => todo!(),
+        MediaType::Audio => download_audio(config)?,
         MediaType::Video(_) => download_video(config)?,
     };
     File::create("yt-dlp.json")?.write(&output.stdout)?;
-
     if let Some(code) = output.status.code() {
         if code != 0 {
             return Err(anyhow!(

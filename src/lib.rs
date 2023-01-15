@@ -41,7 +41,7 @@ pub fn run() -> anyhow::Result<()> {
 
     let url = get_url()?;
 
-    let config = Config::new(MediaType::Video(Resolution::P0144), download_dir, Some(url));
+    let config = Config::new(MediaType::Audio, download_dir, Some(url));
 
     let output = download(&config)?;
 
