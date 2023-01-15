@@ -38,14 +38,14 @@ impl YtDlp {
     }
 
     pub fn needs_processing(&self, config: &Config) -> anyhow::Result<bool> {
-        match config.media_type {
-            MediaType::Audio => todo!(),
-            MediaType::Video(_) => Ok(self
-                .filename
-                .extension()
-                .ok_or_else(|| anyhow!("File downloaded does not have a valid extension"))?
-                != "mp4"),
-        }
+        Ok(self
+            .filename
+            .extension()
+            .ok_or_else(|| anyhow!("File downloaded does not have a valid extension"))?
+            != match config.media_type {
+                MediaType::Audio => "mp3",
+                MediaType::Video(_) => "mp4",
+            })
     }
 }
 
