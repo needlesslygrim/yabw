@@ -1,5 +1,3 @@
-use youtube_downloader::run;
-
 fn main() {
-    dbg!(run());
+    youtube_downloader::run()
 }

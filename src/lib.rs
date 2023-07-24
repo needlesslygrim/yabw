@@ -9,13 +9,10 @@ pub struct YtDlpJson {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct RequestedDownload {
-    filename: PathBuf,
-    #[serde(rename(serialize = "__finadir", deserialize = "__finaldir"))]
-    finaldir: PathBuf,
     filepath: PathBuf,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum Resolution {
     P144,
     P240,
@@ -63,10 +60,12 @@ enum MediaType {
     Video,
 }
 
+#[derive(Debug, Clone)]
 struct Config {
     url: String,
     media_type: MediaType,
     resolution: Option<Resolution>,
+    filepath: PathBuf,
 }
 
 const NULL_JSON_RESPONSE: [u8; 5] = *b"null\n"; // If yt-dlp fails to run successfully, `stdout` will have had `null\n' written to it.
@@ -74,8 +73,9 @@ const NULL_JSON_RESPONSE: [u8; 5] = *b"null\n"; // If yt-dlp fails to run succes
 #[derive(Debug)]
 struct ResolutionParseError;
 
-pub fn run() -> YtDlpJson {
-    let config = get_config();
+pub fn run() {
+    let mut config = get_config();
+
     let output = download(&config);
     if !output.status.success() {
         let mut f = File::create("output.json").expect("Couldn't open log file");
@@ -88,7 +88,28 @@ pub fn run() -> YtDlpJson {
         panic!("yt-dlp did not run successfully, check the error log.");
     }
 
-    serde_json::from_slice::<YtDlpJson>(&output.stdout).expect("This shouldn't have happened, but somehow the JSON failed to be parsed into a `ytDlpJson` struct.")
+    let response = serde_json::from_slice::<YtDlpJson>(&output.stdout).expect("This shouldn't have happened, but somehow the JSON failed to be parsed into a `ytDlpJson` struct.");
+    if let Some(filepath) = response
+        .requested_downloads
+        .first()
+        .map(|download| download.filepath.clone())
+    // TODO: Figure out if this `clone()` is unnecessary.
+    {
+        config.filepath = filepath;
+        let extension = config
+            .filepath
+            .extension()
+            .expect("Somehow the file downloaded has no file extension?");
+        dbg!(config.clone());
+        let needs_processing = match config.media_type {
+            MediaType::Audio => extension != "mp3",
+            MediaType::Video => extension != "mp4",
+        };
+        dbg!(needs_processing);
+        if needs_processing {
+            let output = process(&mut config);
+        }
+    }
 }
 
 fn get_config() -> Config {
@@ -122,6 +143,7 @@ fn get_config() -> Config {
         url: String::from(url.trim()),
         media_type,
         resolution,
+        filepath: Default::default(),
     }
 }
 
@@ -144,5 +166,26 @@ fn download(config: &Config) -> process::Output {
 
     command
         .output()
-        .expect("`yt-dlp` failed to run, check that it is installed.")
+        .expect("`yt-dlp` failed to run, please check that it is installed.")
+}
+
+fn process(config: &mut Config) -> process::Output {
+    let mut command = process::Command::new("ffmpeg");
+    command
+        .arg("-i")
+        .arg(&config.filepath)
+        .args(match config.media_type {
+            MediaType::Audio => ["-c:a", "libmp3lame"].as_slice(),
+            MediaType::Video => ["-c:a", "copy", "-c:v", "copy"].as_slice(),
+        });
+
+    config.filepath.set_extension(match config.media_type {
+        MediaType::Audio => "mp3",
+        MediaType::Video => "mp4",
+    });
+
+    command.arg(&config.filepath);
+    command
+        .output()
+        .expect("Failed to run ffmpeg, please check that it is installed.")
 }
