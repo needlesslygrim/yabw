@@ -1,6 +1,11 @@
-use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
-use std::{fs::File, path::PathBuf, process};
+use std::ops::Deref;
+use std::path::Path;
+use std::process::{Command, Output};
+use std::{env, fs, fs::File, path::PathBuf};
+
+use directories::UserDirs;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct YtDlpJson {
@@ -9,7 +14,7 @@ pub struct YtDlpJson {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct RequestedDownload {
-    filepath: PathBuf,
+    filename: PathBuf,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -61,11 +66,12 @@ enum MediaType {
 }
 
 #[derive(Debug, Clone)]
-struct Config {
+struct Config<'a> {
     url: String,
     media_type: MediaType,
     resolution: Option<Resolution>,
     filepath: PathBuf,
+    download_dir: &'a Path,
 }
 
 const NULL_JSON_RESPONSE: [u8; 5] = *b"null\n"; // If yt-dlp fails to run successfully, `stdout` will have had `null\n' written to it.
@@ -74,45 +80,61 @@ const NULL_JSON_RESPONSE: [u8; 5] = *b"null\n"; // If yt-dlp fails to run succes
 struct ResolutionParseError;
 
 pub fn run() {
-    let mut config = get_config();
+    let user_dirs =
+        UserDirs::new() // Get the directories of the current user so that we can get the right download directory.
+            // TODO: Add an option to specify a download directory.
+            .expect("Couldn't get user directories, please use Redox/Linux/Windows/macOS.");
+    let download_dir = user_dirs
+        .download_dir()
+        .expect("Somehow couldn't get download directory.");
 
-    let output = download(&config);
-    if !output.status.success() {
-        let mut f = File::create("output.json").expect("Couldn't open log file");
-        f.write_all(&output.stderr)
-            .expect("Couldn't write `stderr` to log file.");
-        if output.stdout != NULL_JSON_RESPONSE {
-            f.write_all(&output.stdout)
-                .expect("Couldn't write `stdout` to log file.");
-        }
-        panic!("yt-dlp did not run successfully, check the error log.");
-    }
+    let mut config = get_config(download_dir); // Get the configuration for the tool, resolution, video, etc.
+    println!("Loading video information");
+    let yt_dlp_config = get_yt_dlp_config(&config); // Find out where `yt-dlp` will store the downloaded file.
+    println!("Loaded video information");
 
-    let response = serde_json::from_slice::<YtDlpJson>(&output.stdout).expect("This shouldn't have happened, but somehow the JSON failed to be parsed into a `ytDlpJson` struct.");
-    if let Some(filepath) = response
+    download(&config); // Actually download the video.
+    println!("Downloading file.");
+
+    if let Some(filename) = yt_dlp_config
         .requested_downloads
         .first()
-        .map(|download| download.filepath.clone())
+        .map(|download| download.filename.clone())
     // TODO: Figure out if this `clone()` is unnecessary.
     {
+        // Get the full filepath of the downloaded file.
+        let mut filepath = env::temp_dir();
+        filepath.push(filename);
         config.filepath = filepath;
+
         let extension = config
             .filepath
             .extension()
             .expect("Somehow the file downloaded has no file extension?");
-        dbg!(config.clone());
         let needs_processing = match config.media_type {
             MediaType::Audio => extension != "mp3",
             MediaType::Video => extension != "mp4",
         };
-        dbg!(needs_processing);
         if needs_processing {
-            let output = process(&mut config);
+            println!("Processing file.");
+            let output = process(&mut config); // Process the video if it is not already an mp3 or mp4.
+            if !output.status.success() {
+                let mut f = File::create("ffmpeg.log").expect("Couldn't open log file"); // TODO: Log in the proper location.
+                f.write_all(&output.stderr)
+                    .expect("Couldn't write `stderr` to log file.");
+                panic!("ffmpeg did not run successfully, check the error log.");
+            }
+            let mut stdout = output.stdout.clone();
+            let mut stderr = output.stderr;
+            stdout.append(&mut stderr);
+            fs::write("ffmpeg.log", stdout).expect("TODO: panic message");
         }
     }
+    println!("File processed.");
+    println!("The tool has finished running, your file is located in your downloads directory.");
 }
 
-fn get_config() -> Config {
+fn get_config(download_dir: &Path) -> Config {
     let mut url = String::with_capacity(43); // Maybe the normal length of a youtube url?(?)
     println!("Enter the url to download, e.g. 'https://www.youtube.com/watch?v=2hXNd6x9sZs'.");
     io::stdin().read_line(&mut url).expect("Couldn't read URL.");
@@ -144,38 +166,91 @@ fn get_config() -> Config {
         media_type,
         resolution,
         filepath: Default::default(),
+        download_dir,
     }
 }
 
-fn download(config: &Config) -> process::Output {
-    let mut command = process::Command::new("yt-dlp");
+fn make_base_command(config: &Config) -> Command {
+    let mut command = Command::new("yt-dlp");
 
-    if let Some(resolution) = config.resolution {
-        command
+    match config.media_type {
+        MediaType::Audio => {
+            command.arg("-f").arg("bestaudio");
+        }
+        MediaType::Video => {
+            command
             .arg("-S")
-            .arg(format!("res:{}", resolution.to_string()));
-    } else {
-        command.arg("-x");
-    }
+            .arg(format!("res:{}", config
+            .resolution
+            .expect("Somehow `config.media_type` is `MediaType::Video`, but `config.resolution` is `None`???")
+            .to_string()));
+        }
+    };
 
+    command
+}
+
+fn get_yt_dlp_config(config: &Config) -> YtDlpJson {
+    let mut command = make_base_command(config);
     command
         .arg("-J")
-        .arg("--no-simulate")
-        .arg("--force-overwrites")
+        // .arg("--no-simulate") // TODO: Remove
+        .arg("--no-clean-info-json")
         .arg(&config.url);
 
-    command
+    let output = command
         .output()
-        .expect("`yt-dlp` failed to run, please check that it is installed.")
+        .expect("`yt-dlp` failed to run successfully, check that it is installed");
+
+    parse_yt_dlp_json(&output)
 }
 
-fn process(config: &mut Config) -> process::Output {
-    let mut command = process::Command::new("ffmpeg");
+fn parse_yt_dlp_json(output: &Output) -> YtDlpJson {
+    if !output.status.success() {
+        let mut f = File::create("yt-dlp.log").expect("Couldn't open log file"); // TODO: Log in the proper location.
+        f.write_all(&output.stderr)
+            .expect("Couldn't write `stderr` to log file.");
+        if output.stdout != NULL_JSON_RESPONSE {
+            f.write_all(&output.stdout)
+                .expect("Couldn't write `stdout` to log file.");
+        }
+        panic!("yt-dlp did not run successfully, check the error log.");
+    }
+    let mut stdout = output.stdout.clone();
+    let mut stderr = output.stderr.clone();
+    stdout.append(&mut stderr);
+    fs::write("yt-dlp.log", stdout).expect("TODO: panic message");
+    let parsed = serde_json::from_slice::<YtDlpJson>(&output.stdout)
+        .expect("Failed to parse JSON output of `yt-dlp`");
+
+    parsed
+}
+
+fn download(config: &Config) {
+    let mut command = make_base_command(config);
+
+    command
+        .arg("--force-overwrites")
+        .arg("--quiet")
+        .arg("--progress")
+        .arg("--newline")
+        .arg(&config.url)
+        .current_dir(env::temp_dir());
+
+    command
+        .spawn()
+        .expect("`yt-dlp` failed to run, please check that it is installed.")
+        .wait()
+        .expect("Failed to wait on `yt-dlp`.");
+}
+
+fn process(config: &mut Config) -> Output {
+    let mut command = Command::new("ffmpeg");
     command
         .arg("-i")
         .arg(&config.filepath)
         .args(match config.media_type {
-            MediaType::Audio => ["-c:a", "libmp3lame"].as_slice(),
+            MediaType::Audio => ["-c:a", "libmp3lame", "-vn"].as_slice(),
             MediaType::Video => ["-c:a", "copy", "-c:v", "copy"].as_slice(),
         });
 
@@ -184,7 +259,9 @@ fn process(config: &mut Config) -> process::Output {
         MediaType::Video => "mp4",
     });
 
-    command.arg(&config.filepath);
+    command
+        .arg(config.filepath.file_name().expect("Somehow no file name?"))
+        .current_dir(config.download_dir);
     command
         .output()
         .expect("Failed to run ffmpeg, please check that it is installed.")
