@@ -260,6 +260,7 @@ fn process(config: &mut Config) -> Output {
     });
 
     command
+        .arg("-y") // Overwrites files that already exist
         .arg(config.filepath.file_name().expect("Somehow no file name?"))
         .current_dir(config.download_dir);
     command
