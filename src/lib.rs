@@ -1,3 +1,4 @@
+use console::style;
 use directories::UserDirs;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -186,11 +187,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut config = Config::get_interactive(download_dir)?; // Get the configuration for the tool interactively.
 
-    println!("[+]  INFO: Loading video information..."); // TODO: Coloured output.
+    println!(
+        "{message}",
+        message = style("[+]  INFO: Loading video information...").cyan()
+    );
     let yt_dlp_config = YtDlpJson::get(&config)?; // Get the JSON configuration of `yt-dlp` for this video, just filename at the moment.
-    println!("[+]  INFO: Loaded video information.");
+    println!(
+        "{message}",
+        message = style("[+]  INFO: Loaded video information.").cyan()
+    );
 
-    println!("[+]  INFO: Downloading file...");
+    println!(
+        "{message}",
+        message = style("[+]  INFO: Downloading file...").cyan()
+    );
     download(&config)?; // Actually download the video.
 
     let filename = yt_dlp_config
@@ -212,11 +222,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if needs_processing {
-        println!("[+]  INFO: Processing file...");
+        println!(
+            "{message}",
+            message = style("[+]  INFO: Processing file...").cyan()
+        );
         process(&mut config)?;
+        println!(
+            "{message}",
+            message = style("[+]  INFO: File processed.").cyan()
+        );
     }
-    println!("[+]  INFO: File processed.");
-    println!("[+]  INFO: The tool has finished running, your file is located in your downloads directory.");
+    println!("{message}", message = style("[+]  INFO: The tool has finished running, your file is located in your downloads directory.").green());
     Ok(())
 }
 
