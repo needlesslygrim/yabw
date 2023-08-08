@@ -1,3 +1,8 @@
 fn main() {
-    youtube_downloader::run()
+    if let Result::Err(err) = youtube_downloader::run() {
+        eprintln!("\n----------");
+        eprintln!("[-] ERROR: {err}");
+        eprintln!("----------");
+        std::process::exit(1);
+    };
 }
