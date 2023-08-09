@@ -1,6 +1,8 @@
 use console::style;
+use dialoguer::{theme::ColorfulTheme, Input, Select};
 use directories::UserDirs;
 use serde::{Deserialize, Serialize};
+
 use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -77,24 +79,26 @@ struct ParseResolutionError;
 
 impl Display for ParseResolutionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "failed to parse resolution")
+        write!(f, "failed to parse resolution from usize")
     }
 }
 
 impl Error for ParseResolutionError {}
 
-impl TryFrom<&str> for Resolution {
+// I know this doesn't really make much sense, resolution is numeric, however,
+// I only use this functionality in one place, where we have an index, so too bad :^).
+impl TryFrom<usize> for Resolution {
     type Error = ParseResolutionError;
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
         match value {
-            "144" | "144P" | "144p" => Ok(Self::P144),
-            "240" | "240P" | "240p" => Ok(Self::P240),
-            "480" | "480P" | "480p" => Ok(Self::P480),
-            "720" | "720P" | "720p" => Ok(Self::P720),
-            "1080" | "1080P" | "1080p" => Ok(Self::P1080),
-            "1440" | "1440P" | "1440p" => Ok(Self::P1440),
-            "2160" | "2160P" | "2160p" => Ok(Self::P2160),
+            0 => Ok(Self::P144),
+            1 => Ok(Self::P240),
+            2 => Ok(Self::P480),
+            3 => Ok(Self::P720),
+            4 => Ok(Self::P1080),
+            5 => Ok(Self::P1440),
+            6 => Ok(Self::P2160),
             _ => Err(ParseResolutionError),
         }
     }
@@ -106,23 +110,24 @@ enum MediaType {
     Video,
 }
 
+impl TryFrom<usize> for MediaType {
+    type Error = ParseMediaTypeError;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(MediaType::Audio),
+            1 => Ok(MediaType::Video),
+            _ => Err(ParseMediaTypeError),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ParseMediaTypeError;
 
 impl Display for ParseMediaTypeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "failed to parse media type")
-    }
-}
-impl TryFrom<&str> for MediaType {
-    type Error = ParseMediaTypeError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "video" | "Video" | "v" | "V" => Ok(Self::Video),
-            "audio" | "Audio" | "a" | "A" => Ok(Self::Audio),
-            _ => Err(ParseMediaTypeError),
-        }
+        write!(f, "failed to parse media type from usize")
     }
 }
 
@@ -139,28 +144,40 @@ struct Config<'a> {
 
 impl<'a> Config<'a> {
     fn get_interactive(download_dir: &'a Path) -> Result<Self, Box<dyn Error>> {
-        let mut url = String::new();
-        println!("Enter the URL of the video to download, e.g. 'https://www.youtube.com/watch?v=2hXNd6x9sZs'.");
-        io::stdin()
-            .read_line(&mut url)
-            .map_err(|err| format!("Couldn't read URL: {err}"))?;
+        let theme = ColorfulTheme::default();
 
-        println!("Enter the media type to download, 'video' or 'audio'.");
-        let mut media_type = String::new();
-        io::stdin()
-            .read_line(&mut media_type)
-            .map_err(|err| format!("Couldn't read choice of media type: {err}"))?;
+        let url = Input::<String>::with_theme(&theme)
+            .with_prompt("Enter the URL of the video to download")
+            .interact_text()
+            .map_err(|err| format!("Failed to read choice of URL: {err}"))?;
 
-        let media_type = MediaType::try_from(media_type.trim())?;
+        let media_type: MediaType = Select::with_theme(&theme)
+            .item("Audio")
+            .item("Video")
+            .with_prompt("Pick a media type")
+            .interact()
+            .map_err(|err| format!("Failed to read choice of media type: {err}"))?
+            .try_into()
+            .map_err(|_| {
+                "Somehow the index of the chosen media type is invalid, just try the tool again"
+            })?;
+
         let resolution = match media_type {
             MediaType::Audio => None,
             MediaType::Video => {
-                println!("Please enter a resolution, as given on the YouTube website, e.g. 1440p.");
-                let mut input = String::new();
-                io::stdin()
-                    .read_line(&mut input)
-                    .map_err(|err| format!("Could not read resolution: {err}"))?;
-                Some(Resolution::try_from(input.trim())?)
+                Some(Select::with_theme(&theme)
+                    .item("144p")
+                    .item("240p")
+                    .item("480p")
+                    .item("720p")
+                    .item("1080p")
+                    .item("1440p")
+                    .item("2160p")
+                    .with_prompt("Pick a resolution")
+                    .interact()
+                    .map_err(|err| format!("Failed to read choice of resolution: {err}"))?
+                    .try_into()
+                    .map_err(|_| "Somehow the index of the chosen media type is invalid, just try the tool again")?)
             }
         };
 

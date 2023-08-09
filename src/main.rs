@@ -2,7 +2,7 @@ use console::style;
 
 fn main() {
     if let Result::Err(err) = youtube_downloader::run() {
-        eprintln!("{}", style("\n----------").red());
+        eprintln!("{}", style("----------").red());
         eprintln!(
             "{} {err}",
             style("[-] ERROR:").red(),
