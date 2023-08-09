@@ -269,6 +269,7 @@ fn make_base_command(config: &Config) -> process::Command {
             .as_str()));
         }
     };
+    command.arg("--no-playlist"); // Currently the tool with crash when trying to parse the JSON output of yt-dlp without this flag.
 
     command
 }
