@@ -7,7 +7,7 @@ use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -107,19 +107,7 @@ impl TryFrom<usize> for Resolution {
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum MediaType {
     Audio,
-    Video,
-}
-
-impl TryFrom<usize> for MediaType {
-    type Error = ParseMediaTypeError;
-
-    fn try_from(value: usize) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(MediaType::Audio),
-            1 => Ok(MediaType::Video),
-            _ => Err(ParseMediaTypeError),
-        }
-    }
+    Video(Resolution),
 }
 
 #[derive(Debug)]
@@ -137,7 +125,6 @@ impl Error for ParseMediaTypeError {}
 struct Config<'a> {
     url: String,
     media_type: MediaType,
-    resolution: Option<Resolution>,
     filepath: PathBuf,
     download_dir: &'a Path,
 }
@@ -151,21 +138,17 @@ impl<'a> Config<'a> {
             .interact_text()
             .map_err(|err| format!("Failed to read choice of URL: {err}"))?;
 
-        let media_type: MediaType = Select::with_theme(&theme)
+        let media_type: MediaType = match Select::with_theme(&theme)
             .item("Audio")
             .item("Video")
             .with_prompt("Pick a media type")
             .interact()
             .map_err(|err| format!("Failed to read choice of media type: {err}"))?
-            .try_into()
-            .map_err(|_| {
-                "Somehow the index of the chosen media type is invalid, just try the tool again"
-            })?;
-
-        let resolution = match media_type {
-            MediaType::Audio => None,
-            MediaType::Video => {
-                Some(Select::with_theme(&theme)
+        {
+            0 => Ok(MediaType::Audio),
+            1 => Ok(MediaType::Video({
+                let mut selector = Select::with_theme(&theme);
+                selector
                     .item("144p")
                     .item("240p")
                     .item("480p")
@@ -173,18 +156,21 @@ impl<'a> Config<'a> {
                     .item("1080p")
                     .item("1440p")
                     .item("2160p")
-                    .with_prompt("Pick a resolution")
-                    .interact()
+                    .with_prompt("Pick a resolution");
+
+                selector.interact()
                     .map_err(|err| format!("Failed to read choice of resolution: {err}"))?
                     .try_into()
-                    .map_err(|_| "Somehow the index of the chosen media type is invalid, just try the tool again")?)
-            }
-        };
+                    .map_err(|_| "Somehow the index of the chosen media type is invalid, just try the tool again")?
+            })),
+            _ => Err(
+                "Somehow the index of the chosen media type is invalid, just try the tool again",
+            ),
+        }?;
 
         Ok(Config {
             url: String::from(url.trim()),
             media_type,
-            resolution,
             filepath: Default::default(),
             download_dir,
         })
@@ -235,7 +221,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let needs_processing = match config.media_type {
         MediaType::Audio => extension != "mp3",
-        MediaType::Video => extension != "mp4",
+        MediaType::Video(_) => extension != "mp4",
     };
 
     if needs_processing {
@@ -260,13 +246,10 @@ fn make_base_command(config: &Config) -> process::Command {
         MediaType::Audio => {
             command.arg("-f").arg("bestaudio");
         }
-        MediaType::Video => {
+        MediaType::Video(resolution) => {
             command
-            .arg("-S")
-            .arg(format!("res:{}", config
-            .resolution
-            .expect("`config.media_type` is `MediaType::Video`, but `config.resolution` is `None`, which shouldn't be possible")
-            .as_str()));
+                .arg("-S")
+                .arg(format!("res:{}", resolution.as_str()));
         }
     };
     command.arg("--no-playlist"); // Currently the tool with crash when trying to parse the JSON output of yt-dlp without this flag.
@@ -301,12 +284,12 @@ fn process(config: &mut Config) -> Result<(), String> {
         .arg(&config.filepath)
         .args(match config.media_type {
             MediaType::Audio => ["-c:a", "libmp3lame", "-vn"].as_slice(),
-            MediaType::Video => ["-c:v", "libx265", "-preset", "fast", "-c:a", "aac"].as_slice(),
+            MediaType::Video(_) => ["-c:v", "libx265", "-preset", "fast", "-c:a", "aac"].as_slice(),
         });
 
     config.filepath.set_extension(match config.media_type {
         MediaType::Audio => "mp3",
-        MediaType::Video => "mp4",
+        MediaType::Video(_) => "mp4",
     });
 
     let output =
