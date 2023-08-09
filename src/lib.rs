@@ -301,7 +301,7 @@ fn process(config: &mut Config) -> Result<(), String> {
         .arg(&config.filepath)
         .args(match config.media_type {
             MediaType::Audio => ["-c:a", "libmp3lame", "-vn"].as_slice(),
-            MediaType::Video => ["-c:a", "copy", "-c:v", "copy"].as_slice(),
+            MediaType::Video => ["-c:v", "libx265", "-preset", "fast", "-c:a", "aac"].as_slice(),
         });
 
     config.filepath.set_extension(match config.media_type {
