@@ -1,6 +1,7 @@
-# YouTube Downloader
+# YABW (Yet Another Bad Wrapper)
 
-A little program I made for my mum so that she could download videos from YouTube more easily. Not especially robust :^).
+A little program I made for my mum so that she could download videos from
+YouTube more easily. Not especially robust :^).
 
 Due to the limitations of my mum's 2015 dualcore Macbook, the settings for
 ffmpeg are optimised mainly for speed, not quality. If anyone wants to actually

@@ -1,7 +1,7 @@
 use console::style;
 
 fn main() {
-    if let Result::Err(err) = youtube_downloader::run() {
+    if let Result::Err(err) = yabw::run() {
         eprintln!("{}", style("----------").red());
         eprintln!(
             "{} {err}",
