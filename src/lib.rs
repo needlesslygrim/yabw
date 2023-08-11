@@ -1,50 +1,62 @@
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Input, Select};
 use directories::UserDirs;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use std::env;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Debug, Clone, Default)]
 pub struct YtDlpJson {
     pub requested_downloads: Vec<RequestedDownload>,
 }
 
 impl YtDlpJson {
-    fn get(config: &Config) -> Result<YtDlpJson, String> {
-        let mut command = make_base_command(config);
-
-        let output = command
-            .arg("-J")
-            .arg("--no-clean-info-json")
-            .arg(&config.url)
-            .output()
-            .map_err(|err| format!("yt-dlp failed to run: {err}"))?;
-
-        let mut f = File::create("yt-dlp.log")
+    fn get(config: &Config) -> Result<Vec<RequestedDownload>, String> {
+        let f = File::create("yt-dlp.log")
             .map_err(|err| format!("Couldn't open the yt-dlp log file: {err}"))?;
-        if output.stdout != NULL_YT_DLP_STDOUT {
-            f.write_all(&output.stdout)
-                .map_err(|err| format!("Failed to write `stdout` to the yt-dlp log file: {err}"))?;
-        }
-        f.write_all(&output.stderr)
-            .map_err(|err| format!("Failed to write `stderr` to the yt-dlp log file: {err}`"))?;
+        let mut writer = BufWriter::new(f);
 
-        serde_json::from_slice(&output.stdout).map_err(|err| {
-            format!("Failed to parse JSON output of yt-dlp, check the log file `yt-dlp.log`: {err}")
-        })
+        let mut downloads = Vec::with_capacity(config.downloads.len());
+
+        // TODO: Multithreading
+        for download in &config.downloads {
+            let mut command = make_base_command(download);
+
+            let output = command
+                .arg("-J")
+                .arg("--no-clean-info-json")
+                .arg(&download.url)
+                .output()
+                .map_err(|err| format!("yt-dlp failed to run: {err}"))?;
+
+            if output.stdout != NULL_YT_DLP_STDOUT {
+                writer.write_all(&output.stdout).map_err(|err| {
+                    format!("Failed to write `stdout` to the yt-dlp log file: {err}")
+                })?;
+            }
+            writer.write_all(&output.stderr).map_err(|err| {
+                format!("Failed to write `stderr` to the yt-dlp log file: {err}`")
+            })?;
+            let mut requested_downloads = serde_json::from_slice::<YtDlpJson>(&output.stdout)
+                .map_err(|err| {
+                    format!(
+                    "Failed to parse JSON output of yt-dlp, check the log file `yt-dlp.log`: {err}"
+                )
+                })?
+                .requested_downloads;
+            downloads.append(&mut requested_downloads);
+        }
+        Ok(downloads)
     }
 }
 
-// TODO: Find out if we can store the resolution, media type, and url of the download in here.
-// Doing so would require using `#[serde(skip_serializing)]` so that `serde` doesn't complain.
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Debug, Clone, Default)]
 pub struct RequestedDownload {
     filename: PathBuf,
 }
@@ -104,8 +116,9 @@ impl TryFrom<usize> for Resolution {
     }
 }
 
-#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Default)]
 enum MediaType {
+    #[default]
     Audio,
     Video(Resolution),
 }
@@ -122,11 +135,86 @@ impl Display for ParseMediaTypeError {
 impl Error for ParseMediaTypeError {}
 
 #[derive(Debug, Clone)]
-struct Config<'a> {
+struct Download<'a> {
     url: String,
     media_type: MediaType,
     filepath: PathBuf,
     download_dir: &'a Path,
+}
+
+impl<'a> Download<'a> {
+    fn download(&self) -> Result<(), String> {
+        let mut command = make_base_command(self);
+
+        command
+            .arg("--force-overwrites")
+            .arg("--quiet")
+            .arg("--progress")
+            .arg("--newline")
+            .arg(&self.url)
+            .current_dir(env::temp_dir());
+
+        command
+            .spawn()
+            .map_err(|err| format!("yt-dlp failed to run: {err}"))?
+            .wait()
+            .map_err(|err| format!("Failed to wait on yt-dlp: {err}"))?;
+
+        Ok(())
+    }
+
+    fn process(mut self) -> Result<(), String> {
+        let mut command = process::Command::new("ffmpeg");
+        command
+            .arg("-i")
+            .arg(&self.filepath)
+            .args(match self.media_type {
+                MediaType::Audio => ["-c:a", "libmp3lame", "-vn"].as_slice(),
+                MediaType::Video(_) => {
+                    ["-c:v", "libx265", "-preset", "fast", "-c:a", "aac"].as_slice()
+                }
+            });
+
+        self.filepath.set_extension(match self.media_type {
+            MediaType::Audio => "mp3",
+            MediaType::Video(_) => "mp4",
+        });
+
+        let output = command
+            .arg("-y") // Overwrites files that already exist
+            .arg(self.filepath.file_name().ok_or(
+                "The filename of the video could not be found from the filepath constructed",
+            )?)
+            .current_dir(self.download_dir)
+            .output()
+            .map_err(|err| format!("Failed to run ffmpeg: {err}"))?;
+
+        let mut f = File::create("ffmpeg.log")
+            .map_err(|err| format!("Couldn't open the ffmpeg log file: {err}"))?;
+        f.write_all(&output.stdout)
+            .map_err(|err| format!("Failed to write `stdout` to the ffmpeg log file: {err}"))?;
+        f.write_all(&output.stderr)
+            .map_err(|err| format!("Failed to write `stderr` to the ffmpeg log file: {err}"))?;
+
+        Ok(())
+    }
+
+    fn needs_processing(&self) -> Result<bool, &'static str> {
+        let extension = self
+            .filepath
+            .file_name()
+            .ok_or("Failed to check if a download needed processing")?;
+
+        Ok(match self.media_type {
+            MediaType::Audio => extension != "mp3",
+            MediaType::Video(_) => extension != "mp4",
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Config<'a> {
+    downloads: Vec<Download<'a>>,
 }
 
 impl<'a> Config<'a> {
@@ -168,11 +256,15 @@ impl<'a> Config<'a> {
             ),
         }?;
 
-        Ok(Config {
-            url: String::from(url.trim()),
+        let download = Download {
+            url,
             media_type,
             filepath: Default::default(),
             download_dir,
+        };
+
+        Ok(Config {
+            downloads: vec![download],
         })
     }
 }
@@ -194,7 +286,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         "{message}",
         message = style("[+]  INFO: Loading video information...").cyan()
     );
-    let yt_dlp_config = YtDlpJson::get(&config)?; // Get the JSON configuration of `yt-dlp` for this video, just filename at the moment.
+    let requested_downloads = YtDlpJson::get(&config)?; // Get the configuration of `yt-dlp` for this video, only the filename at the moment.
+    config
+        .downloads
+        .iter_mut()
+        .zip(
+            requested_downloads
+                .into_iter()
+                .map(|requsted_download| requsted_download.filename),
+        )
+        .for_each(|(download, filename)| {
+            download.filepath = filename;
+        });
+
     println!(
         "{message}",
         message = style("[+]  INFO: Loaded video information.").cyan()
@@ -204,45 +308,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         "{message}",
         message = style("[+]  INFO: Downloading file...").cyan()
     );
-    download(&config)?; // Actually download the video.
+    for (_, mut download) in config.downloads.into_iter().enumerate() {
+        download.download()?;
+        let mut filepath = env::temp_dir(); // Get the temp directory...
+        filepath.push(download.filepath); // ...and push the filename to it, so that we have a full path to the file.
+        download.filepath = filepath; // Then set the config filepath to it.
 
-    let filename = yt_dlp_config
-        .requested_downloads
-        .first()
-        .map(|download| &download.filename).ok_or("The output from `yt-dlp` parsed successfully, but the `requested_fields` field of `yt-dlp-config` is an empty Vec")?; // Get the filename of the download.
-
-    let mut filepath = env::temp_dir(); // Get the temp directory...
-    filepath.push(filename); // ...and push the filename to it, so that we have a full path to the file.
-    config.filepath = filepath; // Then set the config filepath to it.
-
-    let extension = config.filepath.extension().ok_or(
-        "The file was downloaded successfully by `yt-dlp` however it has no file extension",
-    )?; // Get the extension of the file so that we can determine whether we need to process it or not.
-
-    let needs_processing = match config.media_type {
-        MediaType::Audio => extension != "mp3",
-        MediaType::Video(_) => extension != "mp4",
-    };
-
-    if needs_processing {
-        println!(
-            "{message}",
-            message = style("[+]  INFO: Processing file...").cyan()
-        );
-        process(&mut config)?;
-        println!(
-            "{message}",
-            message = style("[+]  INFO: File processed.").cyan()
-        );
+        if download.needs_processing()? {
+            println!(
+                "{message}",
+                message = style("[+]  INFO: Processing file...").cyan()
+            );
+            download.process()?;
+            println!(
+                "{message}",
+                message = style("[+]  INFO: File processed.").cyan()
+            );
+        }
     }
     println!("{message}", message = style("[+]  INFO: The tool has finished running, your file is located in your downloads directory.").green());
     Ok(())
 }
 
-fn make_base_command(config: &Config) -> process::Command {
+fn make_base_command(download: &Download) -> process::Command {
     let mut command = process::Command::new("yt-dlp");
 
-    match config.media_type {
+    match download.media_type {
         MediaType::Audio => {
             command.arg("-f").arg("bestaudio");
         }
@@ -255,59 +346,4 @@ fn make_base_command(config: &Config) -> process::Command {
     command.arg("--no-playlist"); // Currently the tool with crash when trying to parse the JSON output of yt-dlp without this flag.
 
     command
-}
-
-fn download(config: &Config) -> Result<(), String> {
-    let mut command = make_base_command(config);
-
-    command
-        .arg("--force-overwrites")
-        .arg("--quiet")
-        .arg("--progress")
-        .arg("--newline")
-        .arg(&config.url)
-        .current_dir(env::temp_dir());
-
-    command
-        .spawn()
-        .map_err(|err| format!("yt-dlp failed to run: {err}"))?
-        .wait()
-        .map_err(|err| format!("Failed to wait on yt-dlp: {err}"))?;
-
-    Ok(())
-}
-
-fn process(config: &mut Config) -> Result<(), String> {
-    let mut command = process::Command::new("ffmpeg");
-    command
-        .arg("-i")
-        .arg(&config.filepath)
-        .args(match config.media_type {
-            MediaType::Audio => ["-c:a", "libmp3lame", "-vn"].as_slice(),
-            MediaType::Video(_) => ["-c:v", "libx265", "-preset", "fast", "-c:a", "aac"].as_slice(),
-        });
-
-    config.filepath.set_extension(match config.media_type {
-        MediaType::Audio => "mp3",
-        MediaType::Video(_) => "mp4",
-    });
-
-    let output =
-        command
-            .arg("-y") // Overwrites files that already exist
-            .arg(config.filepath.file_name().ok_or(
-                "The filename of the video could not be found from the filepath constructed",
-            )?)
-            .current_dir(config.download_dir)
-            .output()
-            .map_err(|err| format!("Failed to run ffmpeg: {err}"))?;
-
-    let mut f = File::create("ffmpeg.log")
-        .map_err(|err| format!("Couldn't open the ffmpeg log file: {err}"))?;
-    f.write_all(&output.stdout)
-        .map_err(|err| format!("Failed to write `stdout` to the ffmpeg log file: {err}"))?;
-    f.write_all(&output.stderr)
-        .map_err(|err| format!("Failed to write `stderr` to the ffmpeg log file: {err}"))?;
-
-    Ok(())
 }

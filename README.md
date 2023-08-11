@@ -5,7 +5,7 @@ YouTube more easily. Not especially robust :^).
 
 Due to the limitations of my mum's 2015 dualcore Macbook, the settings for
 ffmpeg are optimised mainly for speed, not quality. If anyone wants to actually
-use this, then looking at the arguments passed to ffmpeg in `process()` might be
+use this, then looking at the arguments passed to ffmpeg in `Download::process()` might be
 a good idea.
 
 ## Roadmap
