@@ -11,3 +11,10 @@ dialoguer = "0.10.4"
 directories = "5.0.1" # TODO: Stop using this crate since we only need the user's downloads directory.
 serde = { version = "1.0.173", features = ["derive"] }
 serde_json = "1.0.103"
+
+egui = { version = "0.22.0", optional = true }
+eframe = { version = "0.22.0", optional = true}
+rfd = { version = "0.11.4", optional = true, default-features = false, features = ["xdg-portal"]}
+
+[features]
+gui = ["egui", "eframe", "rfd"]

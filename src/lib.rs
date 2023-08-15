@@ -11,6 +11,9 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
+#[cfg(feature = "gui")]
+mod gui;
+
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct YtDlpJson {
     pub requested_downloads: Vec<RequestedDownload>,
@@ -62,7 +65,7 @@ pub struct RequestedDownload {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Resolution {
+pub enum Resolution {
     P144,
     P240,
     P720,
@@ -87,7 +90,7 @@ impl Resolution {
 }
 
 #[derive(Debug)]
-struct ParseResolutionError;
+pub struct ParseResolutionError;
 
 impl Display for ParseResolutionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -117,14 +120,14 @@ impl TryFrom<usize> for Resolution {
 }
 
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Default)]
-enum MediaType {
+pub enum MediaType {
     #[default]
     Audio,
     Video(Resolution),
 }
 
 #[derive(Debug)]
-struct ParseMediaTypeError;
+pub struct ParseMediaTypeError;
 
 impl Display for ParseMediaTypeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -135,11 +138,11 @@ impl Display for ParseMediaTypeError {
 impl Error for ParseMediaTypeError {}
 
 #[derive(Debug, Clone)]
-struct Download<'a> {
-    url: String,
-    media_type: MediaType,
-    filepath: PathBuf,
-    download_dir: &'a Path,
+pub struct Download<'a> {
+    pub url: String,
+    pub media_type: MediaType,
+    pub filepath: PathBuf,
+    pub download_dir: &'a Path,
 }
 
 impl<'a> Download<'a> {
@@ -213,7 +216,7 @@ impl<'a> Download<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct Config<'a> {
+pub struct Config<'a> {
     downloads: Vec<Download<'a>>,
 }
 
@@ -271,7 +274,13 @@ impl<'a> Config<'a> {
 
 const NULL_YT_DLP_STDOUT: [u8; 5] = *b"null\n"; // If yt-dlp fails to run successfully, `stdout` will have had `null\n' written to it.
 
+#[cfg(feature = "gui")]
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    gui::App::build()
+}
+
 // FIXME: Implement a custom error type to avoid dynamic dispatch.
+#[cfg(not(feature = "gui"))]
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let user_dirs = UserDirs::new()
         .ok_or("Couldn't get user directories, please use Redox/Linux/Windows/macOS")?; // Get the directories of the current user so that we can get the right download directory.
